@@ -11,9 +11,7 @@ variable "AWS_ACCESS_KEY_ID" {}
 variable "AWS_SECRET_ACCESS_KEY" {}
 
 provider "aws" {
-  region     = "us-east-1" # Update with your desired region
-  access_key = var.AWS_ACCESS_KEY_ID
-  secret_key = var.AWS_SECRET_ACCESS_KEY
+  region = "us-east-1" # Update with your desired region
 }
 resource "aws_iam_user" "popo24_user" {
   name = "popo24_user"
@@ -41,6 +39,11 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy_ecr_full_ac
   name       = "ecs_task_execution_role_policy_ecr_full_access"
   roles      = [aws_iam_role.ecs_task_execution_role.name]
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
+  lifecycle {
+    ignore_changes = [
+      users,
+    ]
+  }
 }
 
 resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy_ecs_task_execution_role_policy" {
@@ -53,6 +56,7 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy_ecr_public_
   name       = "ecs_task_execution_role_policy_ecr_public_full_access"
   roles      = [aws_iam_role.ecs_task_execution_role.name]
   policy_arn = "arn:aws:iam::aws:policy/AmazonElasticContainerRegistryPublicFullAccess"
+
 }
 
 resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy_s3_full_access" {
@@ -61,7 +65,7 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy_s3_full_acc
   policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
   lifecycle {
     ignore_changes = [
-      users
+      users,
     ]
   }
 }
@@ -211,9 +215,7 @@ resource "aws_db_instance" "postgres_instance" {
   parameter_group_name   = aws_db_parameter_group.custom_pg_parameter_group.name
   vpc_security_group_ids = [aws_security_group.FromAnyWhereToPostgresDB.id]
   skip_final_snapshot    = true
-  # publicly_accessible  = false
-
-  # Additional configurations can be added here as needed
+  publicly_accessible    = true
 
   tags = {
     Name = "My PostgreSQL RDS Instance"
@@ -262,7 +264,7 @@ resource "aws_ecs_task_definition" "popo24_task_definition" {
         },
         {
           name  = "POSTGRES_DATABASE_URL_CONNECTION_STRING",
-          value = var.POSTGRES_DATABASE_URL_CONNECTION_STRING
+          value = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.postgres_instance.address}:5432/popo_24"
         },
         {
           name  = "AUTH0_ISSUER",
@@ -290,6 +292,7 @@ resource "aws_ecs_task_definition" "popo24_task_definition" {
   ])
 }
 
+
 resource "aws_ecs_cluster" "popo24_cluster" {
   name = "popo24-cluster"
 }
@@ -299,54 +302,75 @@ data "aws_vpc" "current" {
   default = true
 }
 
-# resource "aws_ecs_service" "popo24_ecs_service" {
-#   name            = "popo24-ecs"
-#   cluster         = aws_ecs_cluster.popo24_cluster.id
-#   task_definition = aws_ecs_task_definition.popo24_task_definition.arn
-#   launch_type     = "FARGATE"
-#   desired_count   = 1 # Adjust as needed
-#   network_configuration {
-#     subnets = [
-#       "subnet-0e071f0feb21b6507", # Manually provided subnet
-#       "subnet-0a47da0de09037732",
-#       "subnet-0439863a3b4c3d5d0",
-#       "subnet-03c335ec5cfeb0e00",
-#       "subnet-0519201d2028a7ffd",
-#       "subnet-0af6cc7117f41d57d"
-#     ]
-#     security_groups  = [aws_security_group.ElasticContainerService-sg.id]
-#     assign_public_ip = false # set to true for debugging purposes only
-#   }
+resource "aws_ecs_service" "popo24_ecs_service" {
+  name            = "popo24-ecs"
+  cluster         = aws_ecs_cluster.popo24_cluster.id
+  task_definition = aws_ecs_task_definition.popo24_task_definition.arn
+  launch_type     = "FARGATE"
+  desired_count   = 1 # Adjust as needed
+  network_configuration {
+    subnets = [
+      "subnet-0e071f0feb21b6507", # Manually provided subnet
+      "subnet-0a47da0de09037732",
+      "subnet-0439863a3b4c3d5d0",
+      "subnet-03c335ec5cfeb0e00",
+      "subnet-0519201d2028a7ffd",
+      "subnet-0af6cc7117f41d57d"
+    ]
+    security_groups  = [aws_security_group.ElasticContainerService-sg.id]
+    assign_public_ip = true # set to true for debugging purposes only
+  }
 
-#   deployment_controller {
-#     type = "ECS"
-#   }
 
-#   deployment_maximum_percent         = 200
-#   deployment_minimum_healthy_percent = 50
-# }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.popo24_target_group.arn
+    container_name   = "popo24-container" // Replace with your container name
+    container_port   = 8000               // Replace with your container port
+  }
 
-# resource "aws_lb" "popo24_alb" {
-#   name               = "popo24-alb"
-#   load_balancer_type = "application"
-#   subnets = [
-#     "subnet-0e071f0feb21b6507",
-#     "subnet-0a47da0de09037732",
-#     "subnet-0439863a3b4c3d5d0",
-#     "subnet-03c335ec5cfeb0e00",
-#     "subnet-0519201d2028a7ffd",
-#     "subnet-0af6cc7117f41d57d"
-#   ]
-#   security_groups = [aws_security_group.LoadBalancer-sg.id]
-# }
+}
 
-# resource "aws_lb_listener" "popo24_alb_listener" {
-#   load_balancer_arn = aws_lb.popo24_alb.arn
-#   port              = 80
-#   protocol          = "HTTP"
+resource "aws_lb_target_group" "popo24_target_group" {
+  name     = "popo24-target-group"
+  port     = 8000
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpc.current.id
 
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.popo24_target_group.arn
-#   }
-# }
+  target_type = "ip" # Set the target type to "ip" for Fargate launch type
+
+  health_check {
+    path                = "/api/v1/health"
+    protocol            = "HTTP"
+    port                = 8000
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 3
+    unhealthy_threshold = 2
+  }
+}
+
+
+resource "aws_lb" "popo24_alb" {
+  name               = "popo24-alb"
+  load_balancer_type = "application"
+  subnets = [
+    "subnet-0e071f0feb21b6507",
+    "subnet-0a47da0de09037732",
+    "subnet-0439863a3b4c3d5d0",
+    "subnet-03c335ec5cfeb0e00",
+    "subnet-0519201d2028a7ffd",
+    "subnet-0af6cc7117f41d57d"
+  ]
+  security_groups = [aws_security_group.LoadBalancer-sg.id]
+}
+
+resource "aws_lb_listener" "popo24_alb_listener" {
+  load_balancer_arn = aws_lb.popo24_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.popo24_target_group.arn
+  }
+}
