@@ -366,11 +366,12 @@ resource "aws_lb" "popo24_alb" {
 
 resource "aws_lb_listener" "popo24_alb_listener" {
   load_balancer_arn = aws_lb.popo24_alb.arn
-  port              = 80
-  protocol          = "HTTP"
+  port              = 443
+  protocol          = "HTTPS"
 
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.popo24_target_group.arn
   }
 }
+
